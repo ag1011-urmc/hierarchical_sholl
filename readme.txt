@@ -9,3 +9,5 @@ Results from simulation studies can be reproduced by first simulating data via M
 
 Note that simulations were performed using SLURM on a computing cluster. To run simulations locally (not recommended), MDND_Sim_Fit.R can be altered and run directly.
 
+Fits used for figure generation in paper are included in Out/Fits
+
