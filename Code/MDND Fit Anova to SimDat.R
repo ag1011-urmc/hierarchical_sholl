@@ -4,7 +4,7 @@ options(dplyr.summarise.inform = FALSE)
 
 
 # dat_dir = "MDND/"
-dat_dir = "MDND_ImplicitEffect/"
+dat_dir = "MDND/"
 
 #initialize overall summary storage
 pow_fpr_tbl_t = c()
@@ -18,7 +18,7 @@ for(j in seq_along(list.files(paste0("./Simulated_Data/", dat_dir)))){
   dat_seeds = sapply(strsplit(dat_files, split = "\\."), function(x) x[1])
   
   #initialize summary storage for scenario
-  dat_inds = seq_along(dat_files)[1:50]
+  dat_inds = seq_along(dat_files)
   
   p_val_mat_t = matrix(nrow = length(dat_inds), ncol = 3)
   coef_mat_t = matrix(nrow = length(dat_inds), ncol = 4)

@@ -1,3 +1,9 @@
+#Script to fit model 3 to simulated data
+
+################################################
+### load packages
+################################################
+
 library(truncnorm)
 library(parallel)
 library(dplyr)
@@ -6,9 +12,14 @@ library(purrr)
 library(rjags)
 library(LaplacesDemon)
 
+################################################
+### fix global parameters
+################################################
 
-setwd("/gpfs/fs2/scratch/evonkaen/Microglia/Sholl Analysis")
 
+setwd("/path/to/project/directory")
+
+#get scenario from slurm job submission (scen = 1, 2, ..., or 7)
 scen = as.numeric(Sys.getenv("SLURM_ARRAY_TASK_ID"))
 print(scen)
 
@@ -45,6 +56,10 @@ true_effect_list = list(scen1_effect_mat,
                         scen7_effect_mat)
 
 true_effect_mat = true_effect_list[[scen]]
+
+#######################################
+### Define Model
+#######################################
 
 m = "model{
         for(i in 1:N){
@@ -193,6 +208,11 @@ m = "model{
         t.pop ~ dnorm(0, 0.25) T(0,)
     }"
 
+################################################
+### Helper functions
+################################################
+
+#function to create initial values for jags sampler
 inits_func = function(chain, N.Animal, N.Cond_Side, N.Cell, true_effect_mat){
     gen_list = function(chain = chain){
         out = list(
@@ -248,8 +268,8 @@ inits_func = function(chain, N.Animal, N.Cond_Side, N.Cell, true_effect_mat){
         out[['a2.int_effect_priorSD']] = LaplacesDemon::rhalft(1, scale = 0.0001, nu = 4)
         out[['t.int_effect_priorSD']] = LaplacesDemon::rhalft(1, scale = 0.1, nu = 4)
         out[['g.int_effect_priorSD']] = LaplacesDemon::rhalft(1, scale = 1, nu = 4)
-
-
+        
+        
         out[['a1.pop']] = mean(out$a1)
         out[['a2.pop']] = mean(out$a2)
         out[['g.pop']] = mean(out$g)
@@ -297,52 +317,58 @@ inits_func = function(chain, N.Animal, N.Cond_Side, N.Cell, true_effect_mat){
 
 #function to collapse simulated data at animal level
 collapse_at_animal = function(d){
-  avg_curve = c()
-  Animal_ID_aggregate = c()
-  x_avg = c()
-  for(i in seq_len(d$N.Animal)){
-    bool_ind = d$Cell_ID %in% which(d$Animal_ID == i)
-    y_tmp = d$y[bool_ind]
-    id_tmp = d$Cell_ID[bool_ind]
-    sum_curve = rep(0, 100)
-    for(j in unique(id_tmp)){
-      sum_curve = sum_curve + y_tmp[which(id_tmp == j)]
+    avg_curve = c()
+    Animal_ID_aggregate = c()
+    x_avg = c()
+    for(i in seq_len(d$N.Animal)){
+        bool_ind = d$Cell_ID %in% which(d$Animal_ID == i)
+        y_tmp = d$y[bool_ind]
+        id_tmp = d$Cell_ID[bool_ind]
+        sum_curve = rep(0, 100)
+        for(j in unique(id_tmp)){
+            sum_curve = sum_curve + y_tmp[which(id_tmp == j)]
+        }
+        avg_curve = c(avg_curve, sum_curve / length(unique(id_tmp)))
+        x_avg = c(x_avg, 1:100)
+        Animal_ID_aggregate = c(Animal_ID_aggregate, rep(i, 100))
     }
-    avg_curve = c(avg_curve, sum_curve / length(unique(id_tmp)))
-    x_avg = c(x_avg, 1:100)
-    Animal_ID_aggregate = c(Animal_ID_aggregate, rep(i, 100))
-  }
-  d$y = round(avg_curve, 0)
-  d$x = x_avg
-  d$Animal_ID = Animal_ID_aggregate
-  d$N = length(d$y)
-  return(d)
+    d$y = round(avg_curve, 0)
+    d$x = x_avg
+    d$Animal_ID = Animal_ID_aggregate
+    d$N = length(d$y)
+    return(d)
 }
 
-
+#wrapper around jags sampler for parallelization
 rjags_samp_wrapper = function(jj){
-  set.seed(chain_seeds[jj])
-  temp_model = rjags::jags.model(file = textConnection(m),
-                                 data = d,
-                                 inits = function(chain) inits_func(chain = chain, N.Animal = d$N.Animal, N.Cond_Side = d$N.Cond_Side, N.Cell = d$N.Cell, true_effect_mat = true_effect_mat),
-                                 n.adapt = n.adapt,
-                                 n.chains = 1)
-  update(temp_model, n.burn) #burning in n.burn samples
-  out = rjags::jags.samples(model = temp_model, 
-                            variable.names = names(inits_func(chain = 1, N.Animal = d$N.Animal, N.Cond_Side = d$N.Cond_Side, N.Cell = d$N.Cell, true_effect_mat = true_effect_mat)), 
-                            n.iter = n.samp, 
-                            thin = n.thin)
-  # saveRDS(out, file = paste0("./MCMC Samples/crushcontrol_hierarchical_reParameterized_chain", j, ".RDS"))
-  return(out)
+    set.seed(chain_seeds[jj])
+    temp_model = rjags::jags.model(file = textConnection(m),
+                                   data = d,
+                                   inits = function(chain) inits_func(chain = chain, N.Animal = d$N.Animal, N.Cond_Side = d$N.Cond_Side, N.Cell = d$N.Cell, true_effect_mat = true_effect_mat),
+                                   n.adapt = n.adapt,
+                                   n.chains = 1)
+    update(temp_model, n.burn) #burning in n.burn samples
+    out = rjags::jags.samples(model = temp_model, 
+                              variable.names = names(inits_func(chain = 1, N.Animal = d$N.Animal, N.Cond_Side = d$N.Cond_Side, N.Cell = d$N.Cell, true_effect_mat = true_effect_mat)), 
+                              n.iter = n.samp, 
+                              thin = n.thin)
+    # saveRDS(out, file = paste0("./MCMC Samples/crushcontrol_hierarchical_reParameterized_chain", j, ".RDS"))
+    return(out)
 }
 
 #error catch just in case
 #should only trigger if caught at infinite density, then returns list of NAs. Has not happened under current formulation.
 rjags_samp_wrapper_safe = possibly(rjags_samp_wrapper, NA)
+
+# to ignore safe wrapper, comment above line and uncomment the following line:
 # rjags_samp_wrapper_safe = rjags_samp_wrapper
 
-# Run chains in parallel
-dat_dir = "Simulated_Data/MDND_new/"
+################################################
+### Run Jags Sampler
+################################################
+
+#initialize directories and parameters for sampling
+dat_dir = "Simulated_Data/MDND/"
 fit_dir = "Simulated_Fits/MDND/"
 n.chains = 4
 n.adapt = 5000
@@ -354,7 +380,7 @@ scenarios = sapply(strsplit(list.files(dat_dir), split = '_'), function(x) x[2])
 #create seeds to mcmc samplers
 n.datasets = 0
 for(i in scen){
-  n.datasets = (n.datasets + length(list.files(paste0(dat_dir, "scenario_", scenarios[i]))[grepl("RDS", list.files(paste0(dat_dir, "scenario_", scenarios[i])))]))
+    n.datasets = (n.datasets + length(list.files(paste0(dat_dir, "scenario_", scenarios[i]))[grepl("RDS", list.files(paste0(dat_dir, "scenario_", scenarios[i])))]))
 }
 grandparent_seed = scen
 set.seed(grandparent_seed)
@@ -362,52 +388,50 @@ mcmc_seeds = sample(seq_len(1e8), n.datasets)
 
 seed_num = 1
 for(i in scen){
-  # for(i in 1:2){
-  cat("Scenario: ", i, "\n")
-  datasets = list.files(paste0(dat_dir, "scenario_", scenarios[i]))[grepl("RDS", list.files(paste0(dat_dir, "scenario_", scenarios[i])))]
-  for(j in seq_along(datasets)){
-    data_seed = strsplit(datasets[j], split = "\\.")[[1]][1]
-    # for(j in 1:2){
-    cat("\tFitting dataset", j, " out of ", length(datasets), "\n")
-    #generate 1 seed for each chain
-    set.seed(mcmc_seeds[seed_num])
-    chain_seeds = sample(seq_len(1e8), n.chains)
-    
-    
-    #skip dataset if theres already a fit for it in the output directory
-    if(!file.exists(paste0(fit_dir, "scenario_", scenarios[i], "/", data_seed, "_fitted.RDS"))){
-        #read in data
-        out_list = readRDS(paste0(dat_dir, "scenario_", scenarios[i], "/", datasets[j]))
-        d = out_list$d
-        # d = collapse_at_animal(d)
+    cat("Scenario: ", i, "\n")
+    datasets = list.files(paste0(dat_dir, "scenario_", scenarios[i]))[grepl("RDS", list.files(paste0(dat_dir, "scenario_", scenarios[i])))]
+    for(j in seq_along(datasets)){
+        data_seed = strsplit(datasets[j], split = "\\.")[[1]][1]
+        cat("\tFitting dataset", j, " out of ", length(datasets), "\n")
+        #generate 1 seed for each chain
+        set.seed(mcmc_seeds[seed_num])
+        chain_seeds = sample(seq_len(1e8), n.chains)
         
-        #make cluster
-        snow.start.time = proc.time()
-        cl <- makeCluster(n.chains)
         
-        ##Make sure the rjags library is loaded in each worker
-        clusterEvalQ(cl, library(rjags))
+        #skip dataset if theres already a fit for it in the output directory
+        if(!file.exists(paste0(fit_dir, "scenario_", scenarios[i], "/", data_seed, "_fitted.RDS"))){
+            #read in data
+            out_list = readRDS(paste0(dat_dir, "scenario_", scenarios[i], "/", datasets[j]))
+            d = out_list$d
+            # d = collapse_at_animal(d)
+            
+            #make cluster
+            snow.start.time = proc.time()
+            cl <- makeCluster(n.chains)
+            
+            ##Make sure the rjags library is loaded in each worker
+            clusterEvalQ(cl, library(rjags))
+            
+            ##Send data to workers, then fit models. One disadvantage of this
+            ##parallelization is that you lose the ability to watch the progress bar.
+            clusterExport(cl, list("d", "inits_func", "n.adapt", "n.burn", "n.samp", "m", "chain_seeds", "n.thin", "true_effect_mat"))
+            
+            snow.start.time = proc.time()
+            par.samples = clusterApply(cl, 1:n.chains, rjags_samp_wrapper_safe)
+            snow.end.time = proc.time()
+            snow.dtime = snow.end.time - snow.start.time
+            
+            #end cluster
+            stopCluster(cl)
+            
+            #save relevant information
+            # data_seed = strsplit(datasets[j], split = "\\.")[[1]][1]
+            fit_out = list(par.samples = par.samples, time = snow.dtime, chain_seeds = chain_seeds, mcmc_seed = mcmc_seeds[seed_num], data_seed = as.numeric(data_seed))
+            if(!dir.exists(paste0(fit_dir, "scenario_", scenarios[i]))) dir.create(paste0(fit_dir, "scenario_", scenarios[i]))
+            saveRDS(fit_out, paste0(fit_dir, "scenario_", scenarios[i], "/", data_seed, "_fitted.RDS"))
+        }
         
-        ##Send data to workers, then fit models. One disadvantage of this
-        ##parallelization is that you lose the ability to watch the progress bar.
-        clusterExport(cl, list("d", "inits_func", "n.adapt", "n.burn", "n.samp", "m", "chain_seeds", "n.thin", "true_effect_mat"))
-        
-        snow.start.time = proc.time()
-        par.samples = clusterApply(cl, 1:n.chains, rjags_samp_wrapper_safe)
-        snow.end.time = proc.time()
-        snow.dtime = snow.end.time - snow.start.time
-        
-        #end cluster
-        stopCluster(cl)
-        
-        #save relevant information
-        # data_seed = strsplit(datasets[j], split = "\\.")[[1]][1]
-        fit_out = list(par.samples = par.samples, time = snow.dtime, chain_seeds = chain_seeds, mcmc_seed = mcmc_seeds[seed_num], data_seed = as.numeric(data_seed))
-        if(!dir.exists(paste0(fit_dir, "scenario_", scenarios[i]))) dir.create(paste0(fit_dir, "scenario_", scenarios[i]))
-        saveRDS(fit_out, paste0(fit_dir, "scenario_", scenarios[i], "/", data_seed, "_fitted.RDS"))
+        seed_num = seed_num + 1
     }
-    
-    seed_num = seed_num + 1
-  }
 }
 

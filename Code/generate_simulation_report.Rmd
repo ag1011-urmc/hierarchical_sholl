@@ -1,0 +1,649 @@
+---
+title: "Scenario Summaries"
+params: 
+  scen: scen
+  dat_dir: dat_dir
+  fit_dir: fit_dir
+output: pdf_document
+    # rmdformats::html_clean:
+    #     code_folding: hide
+    #     toc: yes
+    #     toc_float: yes
+keep_tex: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading Packages
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(rstan)
+library(devtools)
+library(HDInterval)
+options(dplyr.summarise.inform = FALSE)
+```
+
+## Initializing Functions and Global Objects
+
+```{r}
+###################################################
+### initialize global objects
+###################################################
+
+# manually initialize true effects
+blank_eff_mat = matrix(0, nrow = 3, ncol = 4, dimnames = list(c("true_cond_effect", "true_side_effect", "true_int_effect"), c("a1.cond_side", "a2.cond_side", "g.cond_side", "t.cond_side")))
+
+scen1_effect_mat = blank_eff_mat
+scen1_effect_mat[1,4] = 0.5
+
+scen2_effect_mat = blank_eff_mat
+scen2_effect_mat[2,4] = -0.25
+
+scen3_effect_mat = blank_eff_mat
+scen3_effect_mat[1,4] = 0.5
+scen3_effect_mat[2,4] = -0.25
+
+scen4_effect_mat = blank_eff_mat
+scen4_effect_mat[1,4] = 0.5
+scen4_effect_mat[2,4] = -0.25
+scen4_effect_mat[3,4] = 0.5
+
+scen5_effect_mat = scen4_effect_mat
+
+scen6_effect_mat = scen4_effect_mat
+
+scen7_effect_mat = blank_eff_mat
+
+true_effect_list = list(scen1_effect_mat,
+                        scen2_effect_mat,
+                        scen3_effect_mat,
+                        scen4_effect_mat,
+                        scen5_effect_mat,
+                        scen6_effect_mat,
+                        scen7_effect_mat)
+```
+
+
+<!-- compiled via slurm sob array submission, ignore below -->
+<!-- ```{r} -->
+<!-- #set data and fit directories -->
+<!-- dat_dir = params$dat_dir -->
+<!-- fit_dir = params$fit_dir -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- scen = params$scen -->
+
+<!-- #create dataframe with true effect values -->
+<!-- effect_true_vals = data.frame(par = colnames(true_effect_list[[scen]]), t(true_effect_list[[scen]])) -->
+<!-- rownames(effect_true_vals) = NULL -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- print(params) -->
+
+<!-- print(effect_true_vals) -->
+<!-- ``` -->
+
+```{r}
+scen = 1 #generate report for scenario scen
+dat_dir = "../Simulated_Fits/MDND"
+fit_dir = "../Simulated_Data/MDND"
+```
+
+
+
+```{r}
+###################################################
+### functions for reading in fits and data
+###################################################
+
+#function to read in all fitted data for a scenario as a data.frame
+read_scen_fits = function(scen, fit_dir, fit_file){
+  
+  #load fitted model
+  samp = readRDS(paste0(fit_dir, "/scenario_", scen, "/", fit_file))
+  
+  #initialize dataframe for fitted model
+  fitted_dat = data.frame()
+  
+  #loop over parallel samples
+  for(i in seq_along(samp$par.samples)){
+    
+    #check if chain is NA (error in jags sampler, likely infinite density)
+    if(any(is.na(samp$par.samples[[i]]))) next
+    
+    #initialize sub-sample and sub-label vectors
+    samp_vec = c()
+    label_vec = c()
+    num_vec = c()
+    
+    #loop over parameters
+    for(p in seq_along(samp$par.samples[[i]])){
+      
+      #check if only 1 chains (there should always only be 1 chain)
+      if(seq_len(dim(samp$par.samples[[i]][[p]])[3]) != 1) stop(paste0("Parallel sample ", i, ", parameter ", p, ", does not have exactly 1 chain."))
+      
+      #initialize sub-sample and sub-label vectors
+      sub_samp_vec = c()
+      sub_label_vec = c()
+      sub_num_vec = c()
+      
+      #loop over parameter vector
+      for(v in seq_len(dim(samp$par.samples[[i]][[p]])[1])){
+        
+        #concatenate samples for this element of the parameter vector
+        sub_samp_vec = c(sub_samp_vec, samp$par.samples[[i]][[p]][v,,1])
+        
+        #concatenate label
+        sub_label_vec = c(sub_label_vec, rep(names(samp$par.samples[[i]])[p], dim(samp$par.samples[[i]][[p]])[2]))
+        sub_num_vec = c(sub_num_vec, rep(v, dim(samp$par.samples[[i]][[p]])[2]))
+      }
+      
+      samp_vec = c(samp_vec, sub_samp_vec)
+      label_vec = c(label_vec, sub_label_vec)
+      num_vec = c(num_vec, sub_num_vec)
+    }
+    fitted_dat = rbind(fitted_dat, data.frame(samp = samp_vec, par = label_vec, par_num = num_vec, chain = i, dataset = strsplit(fit_file, "_")[[1]][1]))
+  }
+  return(fitted_dat)
+}
+
+
+get_true_vals = function(scen, dat_dir, fit_dir, true_effect_list){
+  
+  dat_files = list.files(paste0(dat_dir, "/scenario_", scen, '/'))[!grepl("plot", list.files(paste0(dat_dir, "/scenario_", scen, '/')))]
+  fit_files = list.files(paste0(fit_dir, "/scenario_", scen, '/'))[!grepl("plot", list.files(paste0(fit_dir, "/scenario_", scen, '/')))]
+  dataset_seeds = sapply(strsplit(fit_files, split = c("_")), function(x) x[1])
+  
+  
+  par_dat = data.frame()
+  
+  true_effect_mat = true_effect_list[[scen]]
+  
+  for(f in seq_along(dataset_seeds)){
+    
+    #load fitted model
+    dat = readRDS(paste0(dat_dir, "/scenario_", scen, "/", dataset_seeds[f], ".RDS"))
+    
+    #initialize
+    par_vec = c()
+    label_vec = c()
+    num_vec = c()
+    
+    #get parameter levels
+    par_levels = sapply(strsplit(names(dat$true_pars), "_"), function(x) paste(x[-1], collapse = '_'))
+    
+    #get parameter types
+    par_types = sapply(strsplit(names(dat$true_pars), "_"), function(x) x[1])
+    
+    #loop over true parameters by level
+    for(i in seq_along(par_levels)){
+      
+      #coerce vectors to matrices to make following code more concise
+      if(!is.matrix(dat$true_pars[[i]])) dat$true_pars[[i]] = matrix(dat$true_pars[[i]], 1, 4)
+      
+      if(par_types[i] == "theta") {
+        par_vec = c(par_vec, dat$true_pars[[i]][,1], dat$true_pars[[i]][,2], dat$true_pars[[i]][,3], dat$true_pars[[i]][,4])
+        if(par_levels[i] == "cell"){
+          label_vec = c(label_vec, 
+                        rep(paste0("a1"), nrow(dat$true_pars[[i]])), 
+                        rep(paste0("a2"), nrow(dat$true_pars[[i]])),
+                        rep(paste0("g"), nrow(dat$true_pars[[i]])),
+                        rep(paste0("t"), nrow(dat$true_pars[[i]])))
+        } else {
+          label_vec = c(label_vec, 
+                        rep(paste0("a1.", par_levels[i]), nrow(dat$true_pars[[i]])), 
+                        rep(paste0("a2.", par_levels[i]), nrow(dat$true_pars[[i]])),
+                        rep(paste0("g.", par_levels[i]), nrow(dat$true_pars[[i]])),
+                        rep(paste0("t.", par_levels[i]), nrow(dat$true_pars[[i]])))
+        }
+        
+        num_vec = c(num_vec, rep(seq_len(nrow(dat$true_pars[[i]])), 4))
+      } else {
+        #transform sd to precision
+        # par_vec = c(par_vec, 1 / (dat$true_pars[[i]][,1] ^ 2), 1 / (dat$true_pars[[i]][,2] ^ 2), 1 / (dat$true_pars[[i]][,3] ^ 2), 1 / (dat$true_pars[[i]][,4] ^ 2))
+        par_vec = c(par_vec, dat$true_pars[[i]][,1], dat$true_pars[[i]][,2], dat$true_pars[[i]][,3], dat$true_pars[[i]][,4])
+        
+        
+        
+        # if(par_levels[i] == "cell"){
+        #   label_vec = c(label_vec, 
+        #                 rep(paste0("a1.sd"), nrow(dat$true_pars[[i]])), 
+        #                 rep(paste0("a2.sd"), nrow(dat$true_pars[[i]])),
+        #                 rep(paste0("g.sd"), nrow(dat$true_pars[[i]])),
+        #                 rep(paste0("t.sd"), nrow(dat$true_pars[[i]])))
+        # } else {
+          label_vec = c(label_vec, 
+                        rep(paste0("a1.sd.", par_levels[i]), nrow(dat$true_pars[[i]])), 
+                        rep(paste0("a2.sd.", par_levels[i]), nrow(dat$true_pars[[i]])),
+                        rep(paste0("g.sd.", par_levels[i]), nrow(dat$true_pars[[i]])),
+                        rep(paste0("t.sd.", par_levels[i]), nrow(dat$true_pars[[i]])))
+        # }
+        num_vec = c(num_vec, rep(seq_len(nrow(dat$true_pars[[i]])), 4))
+      }
+      
+    }
+    
+    #loop through true effects
+    effect_names = rownames(true_effect_mat)
+    
+    for(i in seq_len(dim(true_effect_mat)[1])){
+      par_vec = c(par_vec, true_effect_mat[i,1], true_effect_mat[i,2], true_effect_mat[i,3], true_effect_mat[i,4])
+      label_vec = c(label_vec, 
+                    paste0("a1.", effect_names[i]), 
+                    paste0("a2.", effect_names[i]),
+                    paste0("g.", effect_names[i]),
+                    paste0("t.", effect_names[i]))
+      num_vec = c(num_vec, rep(1, 4))
+    }
+    
+    par_dat = rbind(par_dat, data.frame(true_value = par_vec, par = label_vec, par_num = num_vec, dataset = dataset_seeds[f]))
+  }
+  return(par_dat)
+}
+```
+
+# Summary Tables
+
+## Load Simulated Data
+```{r}
+#get dataframe with fitted and true values
+scen_true_vals = get_true_vals(scen = scen, dat_dir = dat_dir, fit_dir = fit_dir, true_effect_list = true_effect_list)
+
+#parameters are labeled differently in simulated data.
+        #simulated alias = fitted alias:
+            #*.sd.pop = *.cond_side
+            #*.sd.cond_side = *.animal
+            #*.animal = *.cell
+scen_true_vals = scen_true_vals %>% 
+    group_by(par) %>% 
+    mutate(par = ifelse(grepl("\\.sd\\.animal", par), paste0(strsplit(par, split = "\\.")[[1]][1], ".sd.cell"), par)) %>% 
+    mutate(par = ifelse(grepl("\\.sd\\.cond_side", par), paste0(strsplit(par, split = "\\.")[[1]][1], ".sd.animal"), par)) %>% 
+    mutate(par = ifelse(grepl("\\.sd\\.pop", par), paste0(strsplit(par, split = "\\.")[[1]][1], ".sd.cond_side"), par))
+```
+
+## Read in Output From Fitted Models
+
+```{r}
+fit_files = list.files(paste0(fit_dir, "/scenario_", scen, '/'))[!grepl("plot", list.files(paste0(fit_dir, "/scenario_", scen, '/')))]
+# dataset_seeds = sapply(strsplit(fit_files, split = c("_")), function(x) x[1])
+
+overall_summary_dat = c()
+effect_summary_dat = c()
+diagnostic_dat = c()
+
+print(length(fit_files))
+
+#loop over simulation runs
+for(f in seq_along(fit_files)){
+# for(f in 1:2){
+  #progress report
+  # cat("Loading data for model ", f, " out of ", length(fit_files), "...\n")
+  
+  #load fitted data
+  samp = read_scen_fits(scen, fit_dir, fit_files[f])
+  
+  #reduce data for overall summary computation
+  overall_summary_tmp = samp  %>%
+    group_by(par, par_num, dataset) %>%
+    summarise(samp_mean = mean(samp),
+              LE_Zero = mean(samp < 0),
+              GR_Zero = mean(samp > 0),
+              LB = hdi(samp)[1],
+              UB = hdi(samp)[2]) %>%
+    ungroup
+  overall_summary_dat = rbind(overall_summary_dat, overall_summary_tmp)
+  rm(overall_summary_tmp)
+  
+  #reduce data for effect computation
+  # effect_summary_tmp = samp %>% 
+  #   filter(grepl("cond_side", par, par_num)) %>% 
+  #   filter(!grepl("tau", par)) %>%
+  #   group_by(par, par_num, chain, dataset) %>%
+  #   mutate(samp_num = row_number()) %>%
+  #   ungroup %>%
+  #   pivot_wider(., names_from = par_num, values_from = samp) %>%
+  #   select(-samp_num)
+  # colnames(effect_summary_tmp)[4:7] = c("00", "10", "01", "11")
+  # effect_summary_dat = rbind(effect_summary_dat, effect_summary_tmp)
+  # rm(effect_summary_tmp)
+  
+  #reduce data for diagnostic computation
+  par_vec = unique(samp$par)
+  
+    #loop over parameter
+    for(p in seq_along(par_vec)){
+        #progress report
+        # cat("Getting MCMC diagnostics for parameter ", p, " out of ", length(par_vec), "...\r")
+
+        #initialize parameter storage
+        rhat_vec = c()
+        ess_vec = c()
+
+        #initialize other stuff
+        d = samp %>%
+            filter(par == par_vec[p])
+        par_num_vec = unique(d$par_num)
+
+        #loop over parameter number (only non-trivial loop if vectorized parameter)
+        for(n in par_num_vec){
+         d_tmp = d %>%
+            filter(par_num == n) %>%
+            group_by(chain) %>%
+            mutate(samp_id = row_number()) %>%
+            ungroup %>%
+            pivot_wider(., names_from = chain, values_from = samp) %>%
+            select(-par, -par_num, -dataset, -samp_id) %>%
+            as.matrix()
+
+        rhat_vec = c(rhat_vec, Rhat(d_tmp))
+        ess_vec = c(ess_vec, ess_bulk(d_tmp))
+        }
+        diagnostic_dat = rbind(diagnostic_dat, data.frame(rhat = rhat_vec, ess = ess_vec, par = par_vec[p], par_num = par_num_vec, dataset = samp$dataset[1]))
+    }
+  # cat("\n")
+  
+  rm(samp)
+  gc()
+}
+```
+
+
+## Get Overall Summary Table
+```{r}
+# scen_true_vals_collapsed = scen_true_vals %>%
+  # mutate(par = ifelse(grepl(".animal", par), sapply(strsplit(par, split = "\\."), function(x) paste(x[-length(x)], collapse = '.')), par))
+
+par_summary_table = overall_summary_dat %>%
+  left_join(x = ., y = scen_true_vals, by = c("par", "par_num", "dataset")) %>%
+  mutate(bias = samp_mean - true_value,
+         rel_bias = (samp_mean - true_value) / true_value,
+         coverage = (true_value > LB) & (true_value < UB),
+         MSE = bias^2) %>%
+  group_by(par, par_num) %>%
+  select(-dataset) %>%
+  summarise_all(mean)
+
+# par_summary_table
+```
+
+## Get Effect Data
+```{r}
+cutoff = 0.95
+effect_dat = overall_summary_dat %>% 
+    filter(grepl("_effect", par)) %>%
+    filter(!grepl("priorMean", par)) %>%
+    filter(!grepl("priorSD", par)) %>%
+    mutate(PowFPR = !((0 > LB) & (0 < UB)),
+           LE_Zero_cutoff = LE_Zero >= cutoff,
+           GR_Zero_cutoff = GR_Zero >= cutoff) %>%
+    group_by(par, par_num) %>%
+    select(-dataset) %>%
+    summarise_all(mean) %>% 
+    select(-par_num)
+```
+
+
+## FPR and Power Table for Fitted Models
+
+
+```{r}
+#restructure to make table with FPR/Power for each effect and parameter
+pow_fpr_table = effect_dat %>% 
+    select(-samp_mean, -LB, -UB, -LE_Zero, -GR_Zero, -LE_Zero_cutoff, -GR_Zero_cutoff) %>% 
+    mutate(effect = strsplit(strsplit(par, split = '\\.')[[1]][2], split = "_")[[1]][1],
+           par = strsplit(par, split = '\\.')[[1]][1]) %>%
+    pivot_wider(., names_from = effect, values_from = PowFPR)
+
+```
+
+```{r}
+knitr::kable(pow_fpr_table)
+```
+
+
+## Posterior Effect Probabilities for Fitted Models
+
+```{r}
+#restructure to make table with FPR/Power for each effect and parameter
+post_prob_table = effect_dat %>% 
+    select(-samp_mean, -LB, -UB, -PowFPR) %>% 
+    mutate(effect = strsplit(strsplit(par, split = '\\.')[[1]][2], split = "_")[[1]][1],
+           par = strsplit(par, split = '\\.')[[1]][1]) %>%
+    pivot_wider(., names_from = effect, values_from = c(GR_Zero, LE_Zero)) %>%
+    select(LE_Zero_cond, 
+           GR_Zero_cond, 
+           LE_Zero_side, 
+           GR_Zero_side, 
+           LE_Zero_int, 
+           GR_Zero_int)
+
+```
+
+```{r}
+knitr::kable(post_prob_table)
+```
+
+
+## Posterior Effect w/ Cutoff for Fitted Models
+
+```{r}
+#restructure to make table with FPR/Power for each effect and parameter
+post_prob_cutoff_table = effect_dat %>% 
+    select(-samp_mean, -LB, -UB, -PowFPR, -GR_Zero, -LE_Zero) %>% 
+    mutate(effect = strsplit(strsplit(par, split = '\\.')[[1]][2], split = "_")[[1]][1],
+           par = strsplit(par, split = '\\.')[[1]][1]) %>%
+    pivot_wider(., names_from = effect, values_from = c(LE_Zero_cutoff, GR_Zero_cutoff)) %>%
+    select(LE_Zero_cutoff_cond, 
+           GR_Zero_cutoff_cond, 
+           LE_Zero_cutoff_side, 
+           GR_Zero_cutoff_side, 
+           LE_Zero_cutoff_int, 
+           GR_Zero_cutoff_int)
+
+```
+
+```{r}
+knitr::kable(post_prob_cutoff_table)
+```
+
+<!-- ## Mean and 95% Intervals of True Effects Across All Datasets -->
+<!-- ```{r} -->
+<!-- effect_tbl = scen_true_vals %>% -->
+<!--     filter(!grepl("tau", par) & grepl("cond_side", par)) %>% -->
+<!--     pivot_wider(., names_from = par_num, values_from = true_value) %>% -->
+<!--     mutate(`00` = `1`, -->
+<!--            `10` = `2`, -->
+<!--            `01` = `3`, -->
+<!--            `11` = `4`) %>% -->
+<!--     select(-`1`, -`2`, -`3`, -`4`) %>% -->
+<!--     mutate(interaction_effect = `11` - (`01` + `10`) + `00`) %>% -->
+<!--     mutate(side_effect = ((`11` + `10` - interaction_effect) / 2) - ((`01` + `00`) / 2)) %>% -->
+<!--     mutate(cond_effect = ((`11` + `01` - interaction_effect) / 2) - ((`10` + `00`) / 2)) %>% -->
+<!--     group_by(par) %>% -->
+<!--     summarise(mean_interaction_effect = mean(interaction_effect), -->
+<!--               int_LB = quantile(interaction_effect, c(0.025)), -->
+<!--               int_UB = quantile(interaction_effect, c(0.975)), -->
+<!--               mean_cond_effect = mean(cond_effect), -->
+<!--               cond_LB = quantile(cond_effect, c(0.025)), -->
+<!--               cond_UB = quantile(cond_effect, c(0.975)), -->
+<!--               mean_side_effect = mean(side_effect), -->
+<!--               side_LB = quantile(side_effect, c(0.025)), -->
+<!--               side_UB = quantile(side_effect, c(0.975))) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- kable(effect_tbl) -->
+<!-- ``` -->
+
+## Effect Summaries for Fitted Models
+
+```{r}
+effect_estimate_table = effect_dat %>% 
+    select(-PowFPR, -LE_Zero, -GR_Zero, -LE_Zero_cutoff, -GR_Zero_cutoff) %>% 
+    group_by(par) %>%
+    mutate(effect = strsplit(strsplit(par, split = '\\.')[[1]][2], split = "_")[[1]][1],
+           par = strsplit(par, split = '\\.')[[1]][1]) %>%
+    ungroup() %>%
+     pivot_wider(., names_from = effect, values_from = c(samp_mean, LB, UB)) %>%
+  left_join(x = ., y = (effect_true_vals %>% group_by(par) %>% mutate(par = strsplit(par, split = '\\.')[[1]][1])), by = "par") %>%
+    mutate(cond_bias = samp_mean_cond - true_cond_effect,
+           side_bias = samp_mean_side - true_side_effect,
+           int_bias = samp_mean_int - true_int_effect)
+
+
+```
+
+```{r}
+knitr::kable(effect_estimate_table)
+```
+
+## Cond/Side Level Parameter Summaries for Fitted Model
+
+```{r}
+par_summary_table %>% filter(!grepl("tau", par) & grepl("cond_side", par)) %>% kable
+
+### CI for Cond/Side Parameters across all simulated datasets
+```
+
+## Cond/Side Level Parameter Summaries for Simulated Data
+
+```{r}
+scen_true_vals %>%
+    filter(!grepl("tau", par) & grepl("cond_side", par)) %>%
+    group_by(par, par_num) %>%
+    summarise(sim_mean = mean(true_value), LB = quantile(true_value, probs = 0.05), UB = quantile(true_value, probs = 0.975)) %>%
+    kable
+```
+
+
+## Precision Tables
+
+### a1
+
+```{r}
+## a1
+par_summary_table %>% filter(grepl("a1.sd", par)) %>% kable
+```
+
+### a2
+
+```{r}
+## a2
+par_summary_table %>% filter(grepl("a2.sd", par)) %>% kable
+```
+
+### g
+
+```{r}
+## g
+par_summary_table %>% filter(grepl("g.sd", par)) %>% kable
+```
+
+### t
+
+```{r}
+## t
+par_summary_table %>% filter(grepl("t.sd", par)) %>% kable
+```
+
+## General Summary of All Parameters
+
+```{r}
+knitr::kable(par_summary_table)
+```
+
+# Sampler Diagnostics
+
+## Rhat Summaries Across Datasets
+```{r}
+#seperate cell level parameters, animal level parameters and other parameters from eachother
+diagnostic_dat_cell = diagnostic_dat %>% filter(!grepl("\\.", par))
+diagnostic_dat_else = diagnostic_dat %>% filter(grepl("\\.", par))
+diagnostic_dat_animal = diagnostic_dat_else %>% filter(grepl("animal", par))
+diagnostic_dat_else = diagnostic_dat_else %>% filter(!grepl("animal", par))
+```
+
+### Table for Cell-level parameters
+```{r}
+diagnostic_dat_cell %>% group_by(par) %>% 
+    summarise(Min = min(rhat), 
+              `1st Qu.` = quantile(rhat, probs = 0.25), 
+              Mean = mean(rhat), 
+              Median = median(rhat), 
+              `3rd Qu.` = quantile(rhat, probs = 0.75), 
+              Max = max(rhat)) %>%
+    kable
+```
+
+### Table for Animal-level parameters
+```{r}
+diagnostic_dat_animal %>% group_by(par) %>% 
+    summarise(Min = min(rhat), 
+              `1st Qu.` = quantile(rhat, probs = 0.25), 
+              Mean = mean(rhat), 
+              Median = median(rhat), 
+              `3rd Qu.` = quantile(rhat, probs = 0.75), 
+              Max = max(rhat)) %>%
+    kable
+```
+
+### Table for Other Parameters
+```{r}
+diagnostic_dat_else %>% group_by(par, par_num) %>% 
+    summarise(Min = min(rhat), 
+              `1st Qu.` = quantile(rhat, probs = 0.25), 
+              Mean = mean(rhat), 
+              Median = median(rhat), 
+              `3rd Qu.` = quantile(rhat, probs = 0.75), 
+              Max = max(rhat)) %>%
+    kable
+```
+
+## ESS Summaries Across Datasets
+
+### Table for Cell-level parameters
+```{r}
+diagnostic_dat_cell %>% group_by(par) %>% 
+    summarise(Min = min(ess), 
+              `1st Qu.` = quantile(ess, probs = 0.25), 
+              Mean = mean(ess), 
+              Median = median(ess), 
+              `3rd Qu.` = quantile(ess, probs = 0.75), 
+              Max = max(ess)) %>%
+    kable
+```
+
+### Table for Animal-level parameters
+```{r}
+diagnostic_dat_animal %>% group_by(par) %>% 
+    summarise(Min = min(ess), 
+              `1st Qu.` = quantile(ess, probs = 0.25), 
+              Mean = mean(ess), 
+              Median = median(ess), 
+              `3rd Qu.` = quantile(ess, probs = 0.75), 
+              Max = max(ess)) %>%
+    kable
+```
+
+### Table for Other Parameters
+```{r}
+diagnostic_dat_else %>% group_by(par, par_num) %>% 
+    summarise(Min = min(ess), 
+              `1st Qu.` = quantile(ess, probs = 0.25), 
+              Mean = mean(ess), 
+              Median = median(ess), 
+              `3rd Qu.` = quantile(ess, probs = 0.75), 
+              Max = max(ess)) %>%
+    kable
+```
+
+
+
