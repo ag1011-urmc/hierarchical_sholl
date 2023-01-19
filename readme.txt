@@ -11,3 +11,4 @@ Note that simulations were performed using SLURM on a computing cluster. To run 
 
 Fits used for figure generation in paper are included in Out/Fits
 
+Note that all files in Data/ and Fits/ are tracked via LFS and should be retrieved accordingly.
