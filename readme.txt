@@ -1,4 +1,4 @@
-This code can entirely reprocude the results of XXXXXXXXXX, including figures and tables.
+This code can entirely reprocude the results of https://www.biorxiv.org/content/10.1101/2023.01.23.525256v1, including figures and tables.
 
 Results from the applied examples can be obtained by running:
 fit_ungrouped_animal.R
