@@ -224,6 +224,7 @@ update(jgs, n_burn) #burn in
 samp = rjags::jags.samples(jgs, c(names(inits_func(1, N.Cell, N.Image, N.Animal))), n.iter =  n_samp, thin =  n_thin)
 
 saveRDS(samp, file = "./Out/Fits/ungroupe_animal_fit.RDS")
+samp = readRDS("./Out/Fits/ungroupe_animal_fit.RDS")
 
 
 #######################################
@@ -249,7 +250,9 @@ for(i in seq_along(a1_hat)){
                           a2_hat[i]*(xx - g_hat[i])^2+t_hat[i])))
 }
 idid = rep(seq_along(a1_hat), each = nn)
-dfdf = data.frame(y = yy, x = rep(xx, length(a1_hat)), Cell_ID_num = idid) %>% left_join(., (sholl_data %>% mutate(Cell_ID_num = as.numeric(as.factor(Cell_ID))) %>% select(Cell_ID_num, Animal_ID)), by = "Cell_ID_num")
+dfdf = data.frame(y = yy, x = rep(xx, length(a1_hat)), Cell_ID_num = idid) %>% 
+    left_join(., (sholl_data %>% mutate(Cell_ID_num = as.numeric(as.factor(Cell_ID))) %>% 
+                      select(Cell_ID_num, Animal_ID) %>% distinct()), by = "Cell_ID_num")
 
 
 # Stacked Cell Level Curves
